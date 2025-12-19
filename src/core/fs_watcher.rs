@@ -13,9 +13,19 @@ use uuid::Uuid;
 
 static DEBOUNCE_MS: u64 = 200;
 
-pub fn process_events(rx: std::sync::mpsc::Receiver<notify::Result<Event>>) {
+pub fn start_watching(path: &str) {
     let store = SqliteStore::new("sentinel.db");
+    let (tx, rx) = channel();
     let mut last_seen: HashMap<PathBuf, Instant> = HashMap::new();
+
+    let mut watcher = RecommendedWatcher::new(tx, Config::default())
+        .expect("Failed to initialize FS watcher");
+
+    watcher
+        .watch(Path::new(path), RecursiveMode::Recursive)
+        .expect("Failed to watch path");
+
+    info!("Watching directory: {}", path);
 
     for res in rx {
         match res {
