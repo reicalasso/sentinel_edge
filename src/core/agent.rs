@@ -1,30 +1,48 @@
 use crate::core::fs_watcher;
 use crate::storage::sqlite_manager::SqliteStore;
 use log::info;
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use std::path::Path;
+use std::sync::mpsc::channel;
 use std::thread;
+use std::time::Duration;
 
 pub struct SentinelAgent {
     watch_path: String,
+    watcher: RecommendedWatcher,
+    store: SqliteStore,
 }
 
 impl SentinelAgent {
     pub fn new(path: String) -> Self {
         info!("SentinelAgent initialized");
-        Self { watch_path: path }
+        let store = SqliteStore::new("sentinel.db");
+        let (tx, rx) = channel();
+        
+        let mut watcher = RecommendedWatcher::new(tx, Config::default())
+            .expect("Failed to initialize FS watcher");
+        
+        watcher
+            .watch(Path::new(&path), RecursiveMode::Recursive)
+            .expect("Failed to watch path");
+        
+        // Start the event processing thread
+        thread::spawn(move || {
+            fs_watcher::process_events(rx);
+        });
+        
+        Self { 
+            watch_path: path, 
+            watcher,
+            store,
+        }
     }
 
     pub fn run(&self) {
         info!("SentinelAgent running");
-
-        let path = self.watch_path.clone();
-        let store = SqliteStore::new("sentinel.db");
-
-        thread::spawn(move || {
-            fs_watcher::start_watching(&path, store);
-        });
-
+        
         loop {
-            thread::sleep(std::time::Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(5));
             info!("Agent heartbeat");
         }
     }

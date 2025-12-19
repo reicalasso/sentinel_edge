@@ -5,25 +5,32 @@ use crate::storage::sqlite_manager::SqliteStore;
 use chrono::Utc;
 use log::{info, warn};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
+use std::time::Instant;
 use uuid::Uuid;
 
-pub fn start_watching(path: &str, store: SqliteStore) {
-    let (tx, rx) = channel();
+static DEBOUNCE_MS: u64 = 200;
 
-    let mut watcher = RecommendedWatcher::new(tx, Config::default())
-        .expect("Failed to initialize FS watcher");
-
-    watcher
-        .watch(Path::new(path), RecursiveMode::Recursive)
-        .expect("Failed to watch path");
-
-    info!("Watching directory: {}", path);
+pub fn process_events(rx: std::sync::mpsc::Receiver<notify::Result<Event>>) {
+    let store = SqliteStore::new("sentinel.db");
+    let mut last_seen: HashMap<PathBuf, Instant> = HashMap::new();
 
     for res in rx {
         match res {
-            Ok(event) => handle_event(event, &store),
+            Ok(event) => {
+                for p in &event.paths {
+                    if let Some(last) = last_seen.get(p) {
+                        if last.elapsed().as_millis() < DEBOUNCE_MS.into() {
+                            info!("[COALESCE] Event merged {:?}", p);
+                            continue;
+                        }
+                    }
+                    last_seen.insert(p.clone(), Instant::now());
+                    handle_event(event.clone(), &store);
+                }
+            }
             Err(e) => warn!("Watch error: {:?}", e),
         }
     }
